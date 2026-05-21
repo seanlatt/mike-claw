@@ -3,12 +3,12 @@
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, X } from "lucide-react";
-import { providerLabel, type ModelProvider } from "@/app/lib/modelAvailability";
+import { providerLabel, type RuntimeProvider } from "@/app/lib/modelAvailability";
 
 interface Props {
     open: boolean;
     onClose: () => void;
-    provider: ModelProvider | null;
+    provider: RuntimeProvider | null;
     /** Optional override for the body sentence. */
     message?: string;
 }

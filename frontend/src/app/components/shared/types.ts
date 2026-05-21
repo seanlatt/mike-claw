@@ -129,6 +129,18 @@ export type AssistantEvent =
     }
   | { type: "workflow_applied"; workflow_id: string; title: string }
   | {
+        type: "openclaw_task";
+        task_id: string;
+        kind: string;
+        status: "running" | "needs_review" | "approved" | "rejected";
+        approval_required?: boolean;
+    }
+  | {
+        type: "approval";
+        status: "needs_review" | "approved" | "rejected" | "revision_requested";
+        reason?: string;
+    }
+  | {
         type: "doc_edited";
         filename: string;
         document_id: string;

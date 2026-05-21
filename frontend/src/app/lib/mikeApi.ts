@@ -37,6 +37,15 @@ interface ServerChatDetailOut {
 const API_BASE =
     process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
 
+export type OpenClawHealth = {
+    ok: boolean;
+    gatewayUrl: string;
+    model: string;
+    mockMode: boolean;
+    status?: number;
+    detail?: string;
+};
+
 async function getAuthHeader(): Promise<Record<string, string>> {
     const {
         data: { session },
@@ -71,6 +80,10 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
     }
 
     return (await response.json()) as T;
+}
+
+export async function getOpenClawHealth(): Promise<OpenClawHealth> {
+    return apiRequest<OpenClawHealth>("/health/openclaw");
 }
 
 // ---------------------------------------------------------------------------
@@ -420,6 +433,46 @@ export async function generateChatTitle(
     });
 }
 
+// ---------------------------------------------------------------------------
+// Mike claw-native intake — drop a file, get back an auto-organised matter.
+// ---------------------------------------------------------------------------
+
+export type IntakeResponse = {
+    project_id: string;
+    project_name: string;
+    document_id: string;
+    document_filename: string;
+    matter_title: string;
+    intake_task_id: string;
+    classification: {
+        matter_title?: string;
+        document_type?: string;
+        jurisdiction?: string;
+        practice_area?: string;
+        parties?: string[];
+        summary?: string;
+        suggested_next_actions?: string[];
+    } | null;
+};
+
+export async function intakeDocument(file: File): Promise<IntakeResponse> {
+    const authHeaders = await getAuthHeader();
+    const fd = new FormData();
+    fd.append("file", file);
+    const response = await fetch(`${API_BASE}/openclaw/intake`, {
+        method: "POST",
+        headers: { ...authHeaders },
+        body: fd,
+    });
+    if (!response.ok) {
+        const detail = await response.text().catch(() => "");
+        throw new Error(
+            `Intake failed (HTTP ${response.status}): ${detail.slice(0, 400)}`,
+        );
+    }
+    return (await response.json()) as IntakeResponse;
+}
+
 export async function streamChat(payload: {
     messages: {
         role: string;
@@ -453,6 +506,15 @@ type StreamChatMessage = {
     workflow?: { id: string; title: string };
 };
 
+export type OpenClawTaskPayload = {
+    kind: "document_review" | "legal_research" | "drafting" | "timeline" | "tabular_review";
+    jurisdiction?: string | null;
+    practice_area?: string | null;
+    input_documents?: string[];
+    instructions?: string | null;
+    approval_required?: boolean;
+};
+
 export async function streamProjectChat(payload: {
     projectId: string;
     messages: StreamChatMessage[];
@@ -460,6 +522,7 @@ export async function streamProjectChat(payload: {
     model?: string;
     displayed_doc?: { filename: string; document_id: string };
     attached_documents?: { filename: string; document_id: string }[];
+    openclaw_task?: OpenClawTaskPayload;
     signal?: AbortSignal;
 }): Promise<Response> {
     const { projectId, signal, ...body } = payload;
@@ -473,6 +536,38 @@ export async function streamProjectChat(payload: {
         },
         body: JSON.stringify(body),
         signal,
+    });
+}
+
+export async function streamProjectDocumentReview(payload: {
+    projectId: string;
+    messages: StreamChatMessage[];
+    chat_id?: string;
+    model?: string;
+    documentIds: string[];
+    jurisdiction?: string | null;
+    practiceArea?: string | null;
+    instructions?: string | null;
+    signal?: AbortSignal;
+}): Promise<Response> {
+    const {
+        documentIds,
+        jurisdiction,
+        practiceArea,
+        instructions,
+        ...rest
+    } = payload;
+    return streamProjectChat({
+        ...rest,
+        model: rest.model ?? "openclaw/default",
+        openclaw_task: {
+            kind: "document_review",
+            jurisdiction,
+            practice_area: practiceArea,
+            input_documents: documentIds,
+            instructions,
+            approval_required: true,
+        },
     });
 }
 

@@ -27,7 +27,7 @@ import { useUserProfile } from "@/contexts/UserProfileContext";
 import {
     getModelProvider,
     isModelAvailable,
-    type ModelProvider,
+    type RuntimeProvider,
 } from "@/app/lib/modelAvailability";
 import type { MikeDocument, MikeMessage } from "../shared/types";
 
@@ -75,7 +75,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
     const [docSelectorOpen, setDocSelectorOpen] = useState(false);
     const [workflowModalOpen, setWorkflowModalOpen] = useState(false);
     const [apiKeyModalProvider, setApiKeyModalProvider] =
-        useState<ModelProvider | null>(null);
+        useState<RuntimeProvider | null>(null);
 
     useImperativeHandle(ref, () => ({
         addDoc: (doc: MikeDocument) => {

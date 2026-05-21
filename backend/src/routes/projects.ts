@@ -25,13 +25,20 @@ projectsRouter.get("/", requireAuth, async (req, res) => {
     .select("*")
     .eq("user_id", userId)
     .order("created_at", { ascending: false });
+  console.log(
+    `[GET /projects] user=${userId} email=${userEmail} own=${ownProjects?.length ?? 0}` +
+      (ownError ? ` err=${ownError.message}` : ""),
+  );
   if (ownError) return void res.status(500).json({ detail: ownError.message });
 
   const { data: sharedProjects, error: sharedError } = userEmail
     ? await db
         .from("projects")
         .select("*")
-        .contains("shared_with", [userEmail])
+        // shared_with is jsonb — pass a JSON-stringified array so PostgREST
+        // sends a valid `cs.[…]` containment value. Array-literal form
+        // (`.contains("col", [email])`) breaks on jsonb columns.
+        .contains("shared_with", JSON.stringify([userEmail]))
         .neq("user_id", userId)
         .order("created_at", { ascending: false })
     : { data: [], error: null };
@@ -583,26 +590,30 @@ projectsRouter.patch("/:projectId/documents/:documentId/folder", requireAuth, as
   res.json(data);
 });
 
-export async function handleDocumentUpload(
-  req: import("express").Request,
-  res: import("express").Response,
-  userId: string,
-  projectId: string | null,
-  db: ReturnType<typeof createServerSupabase>,
-) {
-  const file = req.file;
-  if (!file) return void res.status(400).json({ detail: "file is required" });
-
+/**
+ * Save a multer-uploaded file as a Mike document. No-response helper —
+ * callers handle res. Throws on any failure (and marks the partially-
+ * created doc row as 'error' so DB state stays consistent).
+ *
+ * Returns the fully-populated document row (with storage_path +
+ * pdf_storage_path joined in) so callers can render it directly.
+ */
+export async function saveUploadedDocument(opts: {
+  file: Express.Multer.File;
+  userId: string;
+  projectId: string | null;
+  db: ReturnType<typeof createServerSupabase>;
+}): Promise<Record<string, unknown> & { id: string }> {
+  const { file, userId, projectId, db } = opts;
   const filename = file.originalname;
   const suffix = filename.includes(".")
     ? filename.split(".").pop()!.toLowerCase()
     : "";
-  if (!ALLOWED_TYPES.has(suffix))
-    return void res
-      .status(400)
-      .json({
-        detail: `Unsupported file type: ${suffix}. Allowed: pdf, docx, doc`,
-      });
+  if (!ALLOWED_TYPES.has(suffix)) {
+    throw new Error(
+      `Unsupported file type: ${suffix}. Allowed: pdf, docx, doc`,
+    );
+  }
 
   const content = file.buffer;
   const { data: doc, error: insertErr } = await db
@@ -618,13 +629,14 @@ export async function handleDocumentUpload(
     .select("*")
     .single();
 
-  if (insertErr || !doc)
-    return void res
-      .status(500)
-      .json({ detail: "Failed to create document record" });
+  if (insertErr || !doc) {
+    throw new Error(
+      `Failed to create document record: ${insertErr?.message ?? "unknown"}`,
+    );
+  }
+  const docId = doc.id as string;
 
   try {
-    const docId = doc.id as string;
     const key = storageKey(userId, docId, filename);
     const contentType =
       suffix === "pdf"
@@ -646,7 +658,6 @@ export async function handleDocumentUpload(
     const tree = await extractStructureTree(rawBuf, suffix, filename);
     const pageCount = suffix === "pdf" ? await countPdfPages(rawBuf) : null;
 
-    // Convert DOCX/DOC → PDF for display. PDFs are their own rendition.
     let pdfStoragePath: string | null = null;
     if (suffix === "docx" || suffix === "doc") {
       try {
@@ -671,8 +682,6 @@ export async function handleDocumentUpload(
       pdfStoragePath = key;
     }
 
-    // Storage paths live on document_versions — create the V1 row and
-    // point documents.current_version_id at it.
     const { data: versionRow, error: verErr } = await db
       .from("document_versions")
       .insert({
@@ -708,19 +717,40 @@ export async function handleDocumentUpload(
       .select("*")
       .eq("id", docId)
       .single();
-    const responseDoc = updated
-      ? {
-            ...updated,
+    return updated
+      ? ({
+            ...(updated as Record<string, unknown>),
+            id: docId,
             storage_path: key,
             pdf_storage_path: pdfStoragePath,
-        }
-      : updated;
-    return void res.status(201).json(responseDoc);
+        } as Record<string, unknown> & { id: string })
+      : ({ id: docId, storage_path: key, pdf_storage_path: pdfStoragePath } as Record<
+            string,
+            unknown
+        > & { id: string });
   } catch (e) {
-    await db.from("documents").update({ status: "error" }).eq("id", doc.id);
-    return void res
-      .status(500)
-      .json({ detail: `Document processing failed: ${String(e)}` });
+    await db.from("documents").update({ status: "error" }).eq("id", docId);
+    throw e;
+  }
+}
+
+export async function handleDocumentUpload(
+  req: import("express").Request,
+  res: import("express").Response,
+  userId: string,
+  projectId: string | null,
+  db: ReturnType<typeof createServerSupabase>,
+) {
+  const file = req.file;
+  if (!file) return void res.status(400).json({ detail: "file is required" });
+
+  try {
+    const doc = await saveUploadedDocument({ file, userId, projectId, db });
+    return void res.status(201).json(doc);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    const status = msg.startsWith("Unsupported file type") ? 400 : 500;
+    return void res.status(status).json({ detail: msg });
   }
 }
 

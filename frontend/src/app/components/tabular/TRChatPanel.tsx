@@ -35,7 +35,7 @@ import { useUserProfile } from "@/contexts/UserProfileContext";
 import {
     getModelProvider,
     isModelAvailable,
-    type ModelProvider,
+    type RuntimeProvider,
 } from "@/app/lib/modelAvailability";
 
 // ---------------------------------------------------------------------------
@@ -611,9 +611,9 @@ export function TRChatPanel({
         claudeApiKey: profile?.claudeApiKey ?? null,
         geminiApiKey: profile?.geminiApiKey ?? null,
     };
-    const currentModel = profile?.tabularModel ?? "gemini-3-flash-preview";
+    const currentModel = profile?.tabularModel ?? "openclaw/default";
     const [apiKeyModalProvider, setApiKeyModalProvider] =
-        useState<ModelProvider | null>(null);
+        useState<RuntimeProvider | null>(null);
     const [chats, setChats] = useState<TRChat[]>([]);
     const [currentChatId, setCurrentChatId] = useState<string | null>(
         initialChatId ?? null,

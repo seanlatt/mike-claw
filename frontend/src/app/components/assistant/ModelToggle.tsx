@@ -15,21 +15,24 @@ import { isModelAvailable } from "@/app/lib/modelAvailability";
 export interface ModelOption {
     id: string;
     label: string;
-    group: "Anthropic" | "Google";
+    group: "OpenClaw" | "Anthropic" | "Google";
 }
 
 export const MODELS: ModelOption[] = [
+    { id: "openclaw/default", label: "OpenClaw Default", group: "OpenClaw" },
+    { id: "openclaw/grok", label: "OpenClaw Grok", group: "OpenClaw" },
+    { id: "openclaw/gpt-4o", label: "OpenClaw GPT-4o", group: "OpenClaw" },
     { id: "claude-opus-4-7", label: "Claude Opus 4.7", group: "Anthropic" },
     { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", group: "Anthropic" },
     { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro", group: "Google" },
     { id: "gemini-3-flash-preview", label: "Gemini 3 Flash", group: "Google" },
 ];
 
-export const DEFAULT_MODEL_ID = "gemini-3-flash-preview";
+export const DEFAULT_MODEL_ID = "openclaw/default";
 
 export const ALLOWED_MODEL_IDS = new Set(MODELS.map((m) => m.id));
 
-const GROUP_ORDER: ModelOption["group"][] = ["Anthropic", "Google"];
+const GROUP_ORDER: ModelOption["group"][] = ["OpenClaw", "Anthropic", "Google"];
 
 interface Props {
     value: string;

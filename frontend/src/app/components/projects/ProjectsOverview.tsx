@@ -44,8 +44,17 @@ export function ProjectsOverview() {
 
     useEffect(() => {
         listProjects()
-            .then(setProjects)
-            .catch(() => setProjects([]))
+            .then((data) => {
+                console.log("[ProjectsOverview] listProjects returned", {
+                    count: data?.length,
+                    sample: data?.[0],
+                });
+                setProjects(data);
+            })
+            .catch((err) => {
+                console.error("[ProjectsOverview] listProjects failed", err);
+                setProjects([]);
+            })
             .finally(() => setLoading(false));
     }, []);
 

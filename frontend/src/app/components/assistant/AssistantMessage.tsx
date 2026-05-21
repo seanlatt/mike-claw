@@ -1336,6 +1336,31 @@ export function AssistantMessage({
                 />
             );
         }
+        if (event.type === "openclaw_task") {
+            return (
+                <div
+                    key={globalIdx}
+                    className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600"
+                >
+                    <span className="font-medium text-gray-800">
+                        OpenClaw task
+                    </span>
+                    <span className="ml-2">{event.kind}</span>
+                    <span className="ml-2 text-gray-400">#{event.task_id}</span>
+                </div>
+            );
+        }
+        if (event.type === "approval") {
+            return (
+                <div
+                    key={globalIdx}
+                    className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800"
+                >
+                    <span className="font-medium">Human review required</span>
+                    {event.reason && <span className="ml-2">{event.reason}</span>}
+                </div>
+            );
+        }
         return null;
     };
 

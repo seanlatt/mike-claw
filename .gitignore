@@ -16,3 +16,7 @@ next-env.d.ts
 .DS_Store
 .vercel
 coverage
+
+# Runtime data — per-environment, not source.
+backend/.storage/
+backend/.wiki/

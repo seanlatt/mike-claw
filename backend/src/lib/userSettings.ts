@@ -12,13 +12,13 @@ export type UserModelSettings = {
     api_keys: UserApiKeys;
 };
 
-// Title generation is a lightweight task — always routed to the cheapest model
-// of whichever provider the user has keys for: Gemini Flash Lite if Gemini is
-// available, otherwise Claude Haiku. With no user keys set, defaults to Gemini
-// (the dev-mode env fallback).
+// Title generation is lightweight, but Mike is now OpenClaw-native by default.
+// Legacy direct-provider routing can be re-enabled for self-hosted debugging.
 function resolveTitleModel(apiKeys: UserApiKeys): string {
-    if (apiKeys.gemini?.trim()) return DEFAULT_TITLE_MODEL;
-    if (apiKeys.claude?.trim()) return "claude-haiku-4-5";
+    if (process.env.MIKE_LEGACY_TITLE_ROUTING === "true") {
+        if (apiKeys.gemini?.trim()) return "gemini-3.1-flash-lite-preview";
+        if (apiKeys.claude?.trim()) return "claude-haiku-4-5";
+    }
     return DEFAULT_TITLE_MODEL;
 }
 

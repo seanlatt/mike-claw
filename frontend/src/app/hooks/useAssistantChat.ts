@@ -548,6 +548,41 @@ export function useAssistantChat({
                             continue;
                         }
 
+                        if (data.type === "openclaw_task") {
+                            pushEvent({
+                                type: "openclaw_task",
+                                task_id: data.task_id as string,
+                                kind: data.kind as string,
+                                status:
+                                    (data.status as
+                                        | "running"
+                                        | "needs_review"
+                                        | "approved"
+                                        | "rejected") ?? "running",
+                                approval_required:
+                                    data.approval_required !== false,
+                            });
+                            continue;
+                        }
+
+                        if (data.type === "approval") {
+                            pushEvent({
+                                type: "approval",
+                                status:
+                                    (data.status as
+                                        | "needs_review"
+                                        | "approved"
+                                        | "rejected"
+                                        | "revision_requested") ??
+                                    "needs_review",
+                                reason:
+                                    typeof data.reason === "string"
+                                        ? data.reason
+                                        : undefined,
+                            });
+                            continue;
+                        }
+
                         if (data.type === "doc_read_start") {
                             pushEvent({
                                 type: "doc_read",

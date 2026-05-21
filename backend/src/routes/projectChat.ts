@@ -13,6 +13,11 @@ import {
 } from "../lib/chatTools";
 import { getUserApiKeys } from "../lib/userSettings";
 import { checkProjectAccess } from "../lib/access";
+import {
+    buildOpenClawTaskSystemPrompt,
+    createOpenClawTask,
+    type OpenClawTaskInput,
+} from "../lib/openclaw/tasks";
 
 const PROJECT_SYSTEM_PROMPT_EXTRA = `PROJECT CONTEXT:
 You are operating within a project folder that contains a collection of legal documents the user has organised for a single matter. The user's questions will usually refer to one or more documents in this project — your job is to find the relevant files to work on. Use list_documents to see what is available and fetch_documents / read_document to pull in any documents you need before answering.
@@ -29,13 +34,14 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
     const userId = res.locals.userId as string;
     const userEmail = res.locals.userEmail as string | undefined;
     const { projectId } = req.params;
-    const { messages, chat_id, model, displayed_doc, attached_documents } =
+    const { messages, chat_id, model, displayed_doc, attached_documents, openclaw_task } =
         req.body as {
             messages: ChatMessage[];
             chat_id?: string;
             model?: string;
             displayed_doc?: { filename: string; document_id: string };
             attached_documents?: { filename: string; document_id: string }[];
+            openclaw_task?: Partial<OpenClawTaskInput>;
         };
 
     const db = createServerSupabase();
@@ -122,7 +128,17 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
     // the system prompt with the current-turn doc_id slugs so the model
     // knows which docs the user is highlighting *now*, distinct from
     // the broader project doc list.
+    const openClawTask = createOpenClawTask({
+        userId,
+        projectId,
+        task: openclaw_task,
+    });
+
     let systemPromptExtra = PROJECT_SYSTEM_PROMPT_EXTRA;
+    const taskPrompt = buildOpenClawTaskSystemPrompt(openClawTask);
+    if (taskPrompt) {
+        systemPromptExtra += `\n\n${taskPrompt}`;
+    }
     if (attached_documents?.length) {
         const slugByDocumentId = new Map<string, string>();
         for (const [slug, info] of Object.entries(docIndex)) {
@@ -156,6 +172,18 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
 
     try {
         write(`data: ${JSON.stringify({ type: "chat_id", chatId })}\n\n`);
+        const openClawTaskEvent = openClawTask
+            ? {
+                  type: "openclaw_task",
+                  task_id: openClawTask.task_id,
+                  kind: openClawTask.kind,
+                  status: "running",
+                  approval_required: openClawTask.approval_required !== false,
+              }
+            : null;
+        if (openClawTaskEvent) {
+            write(`data: ${JSON.stringify(openClawTaskEvent)}\n\n`);
+        }
 
         const { fullText, events } = await runLLMStream({
             apiMessages,
@@ -172,10 +200,32 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
         });
 
         const annotations = extractAnnotations(fullText, docIndex, events);
+        // Only emit the approval banner when the user explicitly invoked
+        // a task envelope (openclaw_task in the request body). Casual
+        // chat turns ("summarize this matter", "what's the indemnity
+        // situation") are not artifacts and shouldn't carry the banner.
+        // Without this gate, the banner visually dominated every reply
+        // and made the actual answer harder to find in the UI.
+        const approvalEvent =
+            openClawTask && openClawTask.approval_required !== false
+                ? {
+                      type: "approval",
+                      status: "needs_review",
+                      reason: "OpenClaw legal-task output is a draft until human-reviewed.",
+                  }
+                : null;
+        if (approvalEvent) {
+            write(`data: ${JSON.stringify(approvalEvent)}\n\n`);
+        }
+        const persistedEvents = [
+            ...(openClawTaskEvent ? [openClawTaskEvent] : []),
+            ...events,
+            ...(approvalEvent ? [approvalEvent] : []),
+        ];
         await db.from("chat_messages").insert({
             chat_id: chatId,
             role: "assistant",
-            content: events.length ? events : null,
+            content: persistedEvents.length ? persistedEvents : null,
             annotations: annotations.length ? annotations : null,
         });
 

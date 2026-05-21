@@ -135,7 +135,8 @@ export async function listAccessibleProjectIds(
             ? db
                   .from("projects")
                   .select("id")
-                  .contains("shared_with", [userEmail])
+                  // shared_with is jsonb — must pass JSON-stringified array.
+                  .contains("shared_with", JSON.stringify([userEmail]))
                   .neq("user_id", userId)
             : Promise.resolve({ data: [] as { id: string }[] }),
     ]);

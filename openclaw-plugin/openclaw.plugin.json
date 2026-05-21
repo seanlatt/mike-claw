@@ -1,0 +1,25 @@
+{
+  "id": "mike-tools",
+  "name": "Mike Legal Tools",
+  "description": "Read and inspect documents stored in Mike (the legal-assistant app). Use when an agent needs the text of a Mike document to perform legal review, research, drafting, or timeline analysis.",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "mike_list_documents",
+      "mike_read_document",
+      "mike_wiki_list_matters",
+      "mike_wiki_index",
+      "mike_wiki_read",
+      "mike_wiki_write",
+      "mike_wiki_append"
+    ]
+  }
+}

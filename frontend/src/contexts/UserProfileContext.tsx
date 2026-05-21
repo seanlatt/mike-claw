@@ -74,7 +74,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                     creditsResetDate: defaultResetDateStr,
                     creditsRemaining: MONTHLY_CREDIT_LIMIT,
                     tier: "Free",
-                    tabularModel: "gemini-3-flash-preview",
+                    tabularModel: "openclaw/default",
                     claudeApiKey: null,
                     geminiApiKey: null,
                 });
@@ -108,7 +108,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                     creditsRemaining: creditsRemaining,
                     tier: data.tier || "Free",
                     tabularModel:
-                        data.tabular_model || "gemini-3-flash-preview",
+                        data.tabular_model || "openclaw/default",
                     claudeApiKey: data.claude_api_key ?? null,
                     geminiApiKey: data.gemini_api_key ?? null,
                 });
@@ -145,7 +145,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 creditsResetDate: futureResetDate.toISOString(),
                 creditsRemaining: 999999, // temporarily unlimited
                 tier: "Free",
-                tabularModel: "gemini-3-flash-preview",
+                tabularModel: "openclaw/default",
                 claudeApiKey: null,
                 geminiApiKey: null,
             });

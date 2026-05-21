@@ -17,10 +17,14 @@ import { attachActiveVersionPaths, loadActiveVersion } from "./documentVersions"
 import {
     streamChatWithTools,
     resolveModel,
+    providerForModel,
     DEFAULT_MAIN_MODEL,
     type LlmMessage,
     type OpenAIToolSchema,
 } from "./llm";
+import { loadMikeSkillBody } from "./openclaw/tasks";
+import { ensureMatterWiki, indexMatter } from "./wiki/store";
+import { MIKE_WIKI_TOOLS } from "./openclaw/wikiTools";
 
 const STANDARD_FONT_DATA_URL = (() => {
     try {
@@ -2409,11 +2413,50 @@ export async function runLLMStream(params: {
 
     const selectedModel = resolveModel(model, DEFAULT_MAIN_MODEL);
 
+    // -----------------------------------------------------------------------
+    // Claw-native matter context injection
+    // -----------------------------------------------------------------------
+    // When the openclaw provider is in use AND this chat is scoped to a
+    // matter (project), augment the system prompt with: the mike-legal
+    // skill body, a structured matter context block, the current wiki
+    // page index, and the source documents in the matter. Surface the
+    // mike_wiki_* tool catalog too. The agent figures out from natural
+    // language what to do; the lawyer never has to know wiki/tools exist.
+    let effectiveSystemPrompt = systemPrompt;
+    let effectiveTools: OpenAIToolSchema[] = activeTools as OpenAIToolSchema[];
+    try {
+        if (providerForModel(selectedModel) === "openclaw" && projectId) {
+            const augmented = await buildClawMatterContext({
+                projectId,
+                userId,
+                db,
+                docIndex,
+            });
+            if (augmented) {
+                effectiveSystemPrompt =
+                    systemPrompt +
+                    "\n\n" +
+                    "═".repeat(72) +
+                    "\n" +
+                    augmented +
+                    "\n" +
+                    "═".repeat(72) +
+                    "\n";
+                effectiveTools = [...effectiveTools, ...MIKE_WIKI_TOOLS];
+            }
+        }
+    } catch (err) {
+        console.warn(
+            "[runLLMStream] claw matter context injection failed (non-fatal)",
+            err,
+        );
+    }
+
     await streamChatWithTools({
         model: selectedModel,
-        systemPrompt,
+        systemPrompt: effectiveSystemPrompt,
         messages: chatMessages,
-        tools: activeTools as OpenAIToolSchema[],
+        tools: effectiveTools,
         maxIterations: 10,
         apiKeys,
         enableThinking: true,
@@ -2836,3 +2879,121 @@ export async function buildWorkflowStore(
     }
     return store;
 }
+
+// ---------------------------------------------------------------------------
+// Claw-native matter context — built per chat turn when openclaw is in use
+// and there's an active project. Idempotently seeds the matter wiki on
+// first call so the agent always has somewhere to read/write.
+// ---------------------------------------------------------------------------
+
+async function buildClawMatterContext(opts: {
+    projectId: string;
+    userId: string;
+    db: ReturnType<typeof createServerSupabase>;
+    docIndex: DocIndex;
+}): Promise<string | null> {
+    const { projectId, userId, db, docIndex } = opts;
+
+    const { data: project } = await db
+        .from("projects")
+        .select("id, name")
+        .eq("id", projectId)
+        .single();
+    if (!project) return null;
+
+    const { data: latestIntake } = await db
+        .from("openclaw_tasks")
+        .select("artifact, jurisdiction, practice_area")
+        .eq("project_id", projectId)
+        .eq("kind", "intake_triage")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+    const artifact = (latestIntake?.artifact ?? null) as
+        | { matter_title?: string; classification?: Record<string, unknown> | null }
+        | null;
+    const classification = artifact?.classification ?? null;
+    const matterTitle =
+        artifact?.matter_title ||
+        (project.name as string | null) ||
+        `matter ${projectId}`;
+
+    // Seed wiki if missing — safe on every call (writeIfMissing inside).
+    try {
+        await ensureMatterWiki(projectId, {
+            matterTitle,
+            classification: classification as Record<string, unknown> | null,
+        });
+    } catch (err) {
+        console.warn("[claw context] wiki seed skipped:", err);
+    }
+
+    // Catalogue what's in the wiki right now.
+    let pageLines: string[] = [];
+    try {
+        const idx = await indexMatter(projectId);
+        pageLines = idx.pages.map(
+            (p) => `  - ${p.page}  (${p.chars} B, updated ${p.updated_at})`,
+        );
+    } catch (err) {
+        pageLines = [`  - (wiki index failed: ${(err as Error).message})`];
+    }
+
+    // Source documents already attached to this matter.
+    const docLines = Object.entries(docIndex).map(([docId, info]) => {
+        const fname =
+            (info as { filename?: string }).filename ?? "(unknown)";
+        return `  - ${docId}: ${fname}`;
+    });
+
+    const cls = classification ?? {};
+    const lines: string[] = [
+        "# CLAW-NATIVE MATTER CONTEXT",
+        "",
+        "You are operating inside Mike on an active legal matter. Use the",
+        "mike-legal skill operations (below) — the lawyer should never need to",
+        "name tools or wiki pages directly. Figure it out from what they ask.",
+        "",
+        "## CRITICAL — tool calls vs narration",
+        "",
+        "When the user asks you to MODIFY, EDIT, REPURPOSE, UPDATE, REPLACE,",
+        "or CHANGE a document, you MUST emit a TOOL_CALL fence for the",
+        "actual mutation tool (`edit_document`, `replicate_document`,",
+        "`generate_docx`, or the `mike_wiki_*` write tools for wiki pages).",
+        "Describing or summarising changes in prose WITHOUT calling the tool",
+        "is a complete failure of the turn — nothing happens, the document is",
+        "unchanged, and you have misled the user. The mike-legal 'drafts only,",
+        "needs human review' rule means the OUTPUT is a draft — it does NOT",
+        "mean you should describe edits instead of making them. Make the edits,",
+        "then end with the Review status line so the human can verify them.",
+        "",
+        "If you need to read the document first to know what to change, that's",
+        "fine — but DO NOT stop after reading. Read, then immediately emit the",
+        "edit_document (or other mutation) TOOL_CALL fence in the SAME turn.",
+        "",
+        "## Matter",
+        `- matter_id: ${projectId}`,
+        `- name: ${matterTitle}`,
+        `- jurisdiction: ${(cls as Record<string, unknown>).jurisdiction ?? (latestIntake?.jurisdiction as string | null) ?? "unspecified"}`,
+        `- practice_area: ${(cls as Record<string, unknown>).practice_area ?? (latestIntake?.practice_area as string | null) ?? "unspecified"}`,
+        `- document_type: ${(cls as Record<string, unknown>).document_type ?? "unspecified"}`,
+        "",
+        "## Your user_id for ALL mike_wiki_* tool calls",
+        `${userId}`,
+        "",
+        "## Wiki pages already maintained for this matter",
+        ...(pageLines.length > 0 ? pageLines : ["  (none yet — empty wiki)"]),
+        "",
+        "## Source documents attached to this matter",
+        ...(docLines.length > 0 ? docLines : ["  (none yet)"]),
+        "",
+        "═".repeat(72),
+        "",
+        "## mike-legal skill (canonical operating manual)",
+        "",
+        loadMikeSkillBody(),
+    ];
+    return lines.join("\n");
+}
+

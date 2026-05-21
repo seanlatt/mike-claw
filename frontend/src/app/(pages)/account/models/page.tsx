@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useUserProfile } from "@/contexts/UserProfileContext";
 import { MODELS } from "@/app/components/assistant/ModelToggle";
+import { getOpenClawHealth, type OpenClawHealth } from "@/app/lib/mikeApi";
 import {
     isModelAvailable,
     modelGroupToProvider,
@@ -21,6 +22,22 @@ import {
 
 export default function ModelsAndApiKeysPage() {
     const { profile, updateModelPreference, updateApiKey } = useUserProfile();
+    const [openClawHealth, setOpenClawHealth] =
+        useState<OpenClawHealth | null>(null);
+
+    useEffect(() => {
+        let cancelled = false;
+        getOpenClawHealth()
+            .then((health) => {
+                if (!cancelled) setOpenClawHealth(health);
+            })
+            .catch(() => {
+                if (!cancelled) setOpenClawHealth(null);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
 
     return (
         <div className="space-y-4">
@@ -32,6 +49,18 @@ export default function ModelsAndApiKeysPage() {
                     </h2>
                 </div>
                 <div className="space-y-4 max-w-md">
+                    <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600">
+                        <div className="font-medium text-gray-800">
+                            OpenClaw backbone
+                        </div>
+                        <div>
+                            {openClawHealth
+                                ? openClawHealth.ok
+                                    ? `Connected (${openClawHealth.model})`
+                                    : `Disconnected (${openClawHealth.detail ?? "gateway unavailable"})`
+                                : "Checking gateway..."}
+                        </div>
+                    </div>
                     <div>
                         <label className="text-sm text-gray-600 block mb-2">
                             Tabular review model
@@ -39,7 +68,7 @@ export default function ModelsAndApiKeysPage() {
                         <TabularModelDropdown
                             value={
                                 profile?.tabularModel ??
-                                "gemini-3-flash-preview"
+                                "openclaw/default"
                             }
                             apiKeys={{
                                 claudeApiKey: profile?.claudeApiKey ?? null,
@@ -61,14 +90,13 @@ export default function ModelsAndApiKeysPage() {
                     </h2>
                 </div>
                 <p className="text-sm text-gray-500 mb-4 max-w-xl">
-                    You must provide your own API keys for the app to work or
-                    add your API keys into the .env file if you are running your
-                    own instance of Mike.
+                    Mike runs through OpenClaw by default. Direct Claude and
+                    Gemini keys are still available as legacy provider paths
+                    for self-hosted instances.
                 </p>
                 <p className="text-xs text-gray-400 mb-4 max-w-xl">
-                    Title generation automatically routes to the cheapest model
-                    of whichever provider you&rsquo;ve configured (Gemini Flash
-                    Lite if a Gemini key is set, otherwise Claude Haiku).
+                    Title generation and tabular review default to OpenClaw so
+                    legal work stays on the same agentic backbone.
                 </p>
                 <div className="space-y-4 max-w-xl">
                     <ApiKeyField
@@ -105,7 +133,11 @@ function TabularModelDropdown({
     const [isOpen, setIsOpen] = useState(false);
     const selected = MODELS.find((m) => m.id === value);
     const selectedAvailable = isModelAvailable(value, apiKeys);
-    const groups: ("Anthropic" | "Google")[] = ["Anthropic", "Google"];
+    const groups: ("OpenClaw" | "Anthropic" | "Google")[] = [
+        "OpenClaw",
+        "Anthropic",
+        "Google",
+    ];
 
     return (
         <DropdownMenu onOpenChange={setIsOpen}>
