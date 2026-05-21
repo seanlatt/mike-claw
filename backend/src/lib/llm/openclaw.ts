@@ -261,6 +261,49 @@ function formatToolResultsForModel(results: NormalizedToolResult[]): string {
 }
 
 // ---------------------------------------------------------------------------
+// Promised-action detection
+// ---------------------------------------------------------------------------
+// The mike-legal SOUL forbids "I'll do X next" without actually emitting
+// the fence — that's the hallucinated-success failure mode the lawyer
+// hates. This regex catches the most common forms.
+const PROMISE_PATTERNS: RegExp[] = [
+    // "I'll <verb>" / "I will <verb>" / "I will now <verb>"
+    /\bI(?:'ll|\s+will)(?:\s+(?:now|then|next))?\s+(?:call|use|invoke|execute|run|apply|issue|emit|generate|create|replicate|edit|update|fix|repurpose|replace|draft|adapt|read|scan)\b/i,
+    // "calling the X tool now"
+    /\bcalling\s+(?:the\s+)?\w+\s+tool\s+now\b/i,
+    // "now <ing-verb>"
+    /\bnow\s+(?:calling|executing|invoking|generating|applying|replicating|editing|reading|issuing|repurposing|drafting)\b/i,
+    // Filler phrases that delay action
+    /\b(?:stand\s*by|one\s+moment|in\s+the\s+next\s+step|next\s+step|hang\s+on|hold\s+on)\b/i,
+    // "I am now <ing-verb>"
+    /\bI\s+am\s+(?:now\s+)?(?:executing|invoking|generating|applying|preparing|going\s+to)\b/i,
+    // "I am going to / about to <verb>"
+    /\bI\s+am\s+(?:going\s+to|about\s+to)\s+\w+/i,
+];
+
+function promisesActionWithoutCall(text: string): boolean {
+    if (!text || text.trim().length === 0) return false;
+    return PROMISE_PATTERNS.some((re) => re.test(text));
+}
+
+const NUDGE_EXECUTE_NOW = [
+    "EXECUTE NOW.",
+    "",
+    "Your previous turn described a future action but did not emit a",
+    "TOOL_CALL fence. Per the mike-legal SOUL: you execute, you don't",
+    "narrate. Two options:",
+    "",
+    "1. Emit the TOOL_CALL fence in THIS turn for the action you said",
+    "   you would take.",
+    "2. If you can't (wrong file type, missing data, schema mismatch),",
+    "   say so in one sentence with the specific reason. Example:",
+    "   \"Can't edit — this is a PDF, edit_document requires .docx.\"",
+    "",
+    "Do not promise to act \"next\" again. Either act in this turn or",
+    "say why you can't.",
+].join("\n");
+
+// ---------------------------------------------------------------------------
 // CLI invocation
 // ---------------------------------------------------------------------------
 
@@ -524,6 +567,12 @@ async function streamOpenClawWithTools(
         params.messages.map((m) => ({ role: m.role, content: m.content }));
 
     let fullText = "";
+    // Tracks consecutive iterations where the model narrated a future
+    // action ("I'll call X next", "standing by", "calling the tool now")
+    // without emitting a tool fence. The mike-legal SOUL forbids this,
+    // but Grok still slips sometimes — we nudge once, surface failure
+    // after two consecutive nudges.
+    let consecutivePromisedNoAction = 0;
 
     for (let iter = 0; iter < maxIter; iter++) {
         const prompt = flattenPrompt(
@@ -542,11 +591,42 @@ async function streamOpenClawWithTools(
         const parsed = parseToolCalls(raw);
 
         if (parsed.toolCalls.length === 0) {
-            // Final answer.
+            // No tool call this turn. Two cases:
+            //   1. Genuine final answer — emit + return.
+            //   2. The model PROMISED an action but didn't emit a fence.
+            //      Nudge once. If it happens twice in a row, surface a
+            //      real failure so the lawyer isn't left in a silent loop.
+            if (promisesActionWithoutCall(raw)) {
+                consecutivePromisedNoAction += 1;
+                if (consecutivePromisedNoAction === 1) {
+                    history.push({ role: "assistant", content: raw });
+                    history.push({
+                        role: "user",
+                        content: NUDGE_EXECUTE_NOW,
+                    });
+                    continue; // re-enter loop, do NOT emit raw to user
+                }
+                // 2nd consecutive miss — surface a clear failure.
+                const failureMsg =
+                    "\n\n⚠ I described an action but couldn't execute it. " +
+                    "This usually means the tool schema didn't fit (e.g. " +
+                    "trying to edit a PDF — only .docx is editable) or the " +
+                    "request is ambiguous. Tell me what you want me to do " +
+                    "in a different way, or switch to Claude Opus for edits.";
+                await emitChunked(
+                    raw + failureMsg,
+                    params.callbacks?.onContentDelta,
+                );
+                fullText += raw + failureMsg;
+                return { fullText };
+            }
+            // Genuine final answer.
             await emitChunked(raw, params.callbacks?.onContentDelta);
             fullText += raw;
             return { fullText };
         }
+        // Got a tool call — reset the no-action counter.
+        consecutivePromisedNoAction = 0;
 
         // Pre-tool text — let the UI see the model's reasoning before
         // tool calls run.
