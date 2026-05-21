@@ -2425,13 +2425,25 @@ export async function runLLMStream(params: {
     let effectiveSystemPrompt = systemPrompt;
     let effectiveTools: OpenAIToolSchema[] = activeTools as OpenAIToolSchema[];
     try {
-        if (providerForModel(selectedModel) === "openclaw" && projectId) {
-            const augmented = await buildClawMatterContext({
-                projectId,
-                userId,
-                db,
-                docIndex,
-            });
+        if (providerForModel(selectedModel) === "openclaw") {
+            // Two flavours of context, picked by whether the chat is
+            // scoped to a project:
+            //   - matter context (single matter, full wiki page index,
+            //     source doc list)
+            //   - cross-matter context (every matter the user has, brief
+            //     summary each, so the agent can answer questions about
+            //     ANY matter from the global chat)
+            const augmented = projectId
+                ? await buildClawMatterContext({
+                      projectId,
+                      userId,
+                      db,
+                      docIndex,
+                  })
+                : await buildClawCrossMatterContext({
+                      userId,
+                      db,
+                  });
             if (augmented) {
                 effectiveSystemPrompt =
                     systemPrompt +
@@ -2987,6 +2999,115 @@ async function buildClawMatterContext(opts: {
         "",
         "## Source documents attached to this matter",
         ...(docLines.length > 0 ? docLines : ["  (none yet)"]),
+        "",
+        "═".repeat(72),
+        "",
+        "## mike-legal skill (canonical operating manual)",
+        "",
+        loadMikeSkillBody(),
+    ];
+    return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Cross-matter context — built for the GLOBAL chat (no project_id). Lists
+// every matter the user owns with brief context so the agent can answer
+// "what's going on with the demo project?" from the main chat. The agent
+// can drill into any matter via mike_wiki_list_matters / mike_wiki_read.
+// ---------------------------------------------------------------------------
+
+const CROSS_MATTER_LIMIT = 20;
+
+async function buildClawCrossMatterContext(opts: {
+    userId: string;
+    db: ReturnType<typeof createServerSupabase>;
+}): Promise<string | null> {
+    const { userId, db } = opts;
+
+    const { data: projects } = await db
+        .from("projects")
+        .select("id, name, created_at, updated_at")
+        .eq("user_id", userId)
+        .order("updated_at", { ascending: false })
+        .limit(CROSS_MATTER_LIMIT);
+
+    const projectList = (projects ?? []) as {
+        id: string;
+        name: string;
+        created_at: string;
+        updated_at: string;
+    }[];
+
+    // Pull the latest intake_triage artifact per matter so we can show
+    // jurisdiction / practice_area / document_type alongside the title.
+    const matterIds = projectList.map((p) => p.id);
+    let classByMatter = new Map<string, Record<string, unknown>>();
+    if (matterIds.length > 0) {
+        const { data: tasks } = await db
+            .from("openclaw_tasks")
+            .select("project_id, kind, artifact, created_at")
+            .in("project_id", matterIds)
+            .eq("kind", "intake_triage")
+            .order("created_at", { ascending: false });
+        for (const t of (tasks ?? []) as {
+            project_id: string;
+            artifact: { classification?: Record<string, unknown> | null } | null;
+        }[]) {
+            if (classByMatter.has(t.project_id)) continue; // keep newest
+            const cls = t.artifact?.classification ?? null;
+            if (cls && typeof cls === "object") {
+                classByMatter.set(t.project_id, cls as Record<string, unknown>);
+            }
+        }
+    }
+
+    // Document counts per matter — one round-trip.
+    const docCounts = new Map<string, number>();
+    if (matterIds.length > 0) {
+        const { data: docs } = await db
+            .from("documents")
+            .select("project_id")
+            .in("project_id", matterIds);
+        for (const d of (docs ?? []) as { project_id: string }[]) {
+            docCounts.set(
+                d.project_id,
+                (docCounts.get(d.project_id) ?? 0) + 1,
+            );
+        }
+    }
+
+    const matterLines = projectList.length
+        ? projectList.map((p) => {
+              const cls = classByMatter.get(p.id) ?? {};
+              const juris = (cls.jurisdiction as string) ?? "?";
+              const practice = (cls.practice_area as string) ?? "?";
+              const dtype = (cls.document_type as string) ?? "?";
+              const docs = docCounts.get(p.id) ?? 0;
+              return `  - "${p.name}"  (matter_id ${p.id})  juris=${juris}  area=${practice}  type=${dtype}  docs=${docs}`;
+          })
+        : ["  (none yet — the operator hasn't created any matters)"];
+
+    const lines: string[] = [
+        "# CLAW-NATIVE CROSS-MATTER CONTEXT",
+        "",
+        "You are in the **global chat** for this operator — not scoped to a",
+        "single matter. Treat every question that names or hints at a matter",
+        "(by name, jurisdiction, party, file, or 'the X project') as a",
+        "request to drill into that matter's wiki. Use the matter list",
+        "below to map names to matter_ids, then read the wiki to answer.",
+        "",
+        "## Your user_id for ALL mike_wiki_* tool calls",
+        `${userId}`,
+        "",
+        `## The operator's matters (most recent ${matterLines.length})`,
+        ...matterLines,
+        "",
+        "If the operator names a matter that's not in this list, use",
+        "mike_wiki_list_matters to look it up (the list above is capped at",
+        `${CROSS_MATTER_LIMIT}). If they reference a matter you can match,`,
+        "use mike_wiki_index on that matter_id, then mike_wiki_read the",
+        "pages most relevant to the question (parties.md, risks.md,",
+        "timeline.md, etc.). Answer with citations.",
         "",
         "═".repeat(72),
         "",
