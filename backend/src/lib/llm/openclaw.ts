@@ -203,24 +203,47 @@ type ParsedToolCall = {
     input: Record<string, unknown>;
 };
 
+type FenceFailure =
+    | { kind: "unclosed_fence"; preview: string }
+    | { kind: "malformed_json"; preview: string };
+
 type ParsedTurn = {
     preToolText: string;
     toolCalls: ParsedToolCall[];
     /** Raw assistant text including the fences — fed back into history. */
     raw: string;
+    /** The model emitted at least one open fence marker. */
+    sawFenceOpen: boolean;
+    /**
+     * Fence-attempts that couldn't become valid tool calls — unclosed
+     * (model truncated mid-JSON, common on long generate_docx args) or
+     * malformed JSON. When non-empty, do NOT emit the raw text as the
+     * final answer; surface a clear error instead.
+     */
+    fenceFailures: FenceFailure[];
 };
 
 function parseToolCalls(text: string): ParsedTurn {
     const calls: ParsedToolCall[] = [];
+    const fenceFailures: FenceFailure[] = [];
     let preToolEnd = text.length;
+    let sawFenceOpen = false;
     const openRe = new RegExp(TOOL_FENCE_OPEN_RE.source, "g");
     let openMatch: RegExpExecArray | null;
     while ((openMatch = openRe.exec(text)) !== null) {
+        sawFenceOpen = true;
         const openStart = openMatch.index;
         const openEnd = openMatch.index + openMatch[0].length;
         const tail = text.slice(openEnd);
         const closeMatch = TOOL_FENCE_CLOSE_RE.exec(tail);
-        if (!closeMatch) break;
+        if (!closeMatch) {
+            if (calls.length === 0) preToolEnd = openStart;
+            fenceFailures.push({
+                kind: "unclosed_fence",
+                preview: tail.slice(0, 200).trim(),
+            });
+            break;
+        }
         const closeStart = openEnd + closeMatch.index;
         if (calls.length === 0) preToolEnd = openStart;
         const jsonStr = text.slice(openEnd, closeStart).trim();
@@ -238,10 +261,17 @@ function parseToolCalls(text: string): ParsedTurn {
                             ? (parsed.input as Record<string, unknown>)
                             : {},
                 });
+            } else {
+                fenceFailures.push({
+                    kind: "malformed_json",
+                    preview: jsonStr.slice(0, 200),
+                });
             }
         } catch {
-            // Malformed JSON — skip this fence. The model will see we
-            // didn't acknowledge it on the next turn and can try again.
+            fenceFailures.push({
+                kind: "malformed_json",
+                preview: jsonStr.slice(0, 200),
+            });
         }
         openRe.lastIndex = closeStart + closeMatch[0].length;
     }
@@ -249,6 +279,8 @@ function parseToolCalls(text: string): ParsedTurn {
         preToolText: text.slice(0, preToolEnd).trim(),
         toolCalls: calls,
         raw: text,
+        sawFenceOpen,
+        fenceFailures,
     };
 }
 
@@ -596,11 +628,62 @@ async function streamOpenClawWithTools(
         const parsed = parseToolCalls(raw);
 
         if (parsed.toolCalls.length === 0) {
-            // No tool call this turn. Two cases:
-            //   1. Genuine final answer — emit + return.
-            //   2. The model PROMISED an action but didn't emit a fence.
+            // No tool call this turn. Three cases:
+            //   1. Genuine final answer (no fence at all) — emit + return.
+            //   2. Fence was opened but didn't close OR JSON didn't parse
+            //      — surface a clear failure, never emit the raw JSON
+            //      blob as the final answer.
+            //   3. The model PROMISED an action in prose without a fence.
             //      Nudge once. If it happens twice in a row, surface a
             //      real failure so the lawyer isn't left in a silent loop.
+
+            // Case 2: malformed/truncated fence attempt. This is what
+            // caused the "raw JSON contract dumped as chat content"
+            // bug — model emitted <<<TOOL_CALL>>>{"name":"generate_docx",
+            // "input":{...huge contract body...}} and ran out of tokens
+            // before closing. Don't pretend that's a final answer.
+            if (parsed.fenceFailures.length > 0) {
+                const failure = parsed.fenceFailures[0];
+                const kindMsg =
+                    failure.kind === "unclosed_fence"
+                        ? "the tool-call fence was opened but never closed (probably truncated mid-JSON because the arguments were too long for one turn)"
+                        : "the tool-call JSON was malformed";
+                const failureMsg = [
+                    `⚠ Tool call failed: ${kindMsg}.`,
+                    "",
+                    "What this usually means: the agent tried to call a tool",
+                    "with arguments too large to fit (e.g. asking generate_docx",
+                    "to produce a full contract in one shot). Nothing was",
+                    "actually executed. Try one of:",
+                    "  • Ask in smaller steps (e.g. 'generate the header",
+                    "    sections first, then add the operative clauses')",
+                    "  • Switch to Claude Opus for this turn (model picker,",
+                    "    top right) — Claude has native tool calling and",
+                    "    handles large args better",
+                    "  • Restate the request more concretely so the agent",
+                    "    knows what to call",
+                    "",
+                    `(debug — fence preview: ${failure.preview.slice(0, 150)}…)`,
+                ].join("\n");
+                console.warn(
+                    `[openclaw adapter] fence failure (${failure.kind}); preview=${JSON.stringify(failure.preview.slice(0, 120))}`,
+                );
+                // Emit the pre-fence text (if any — usually empty) then
+                // the failure message. NEVER emit the raw fence JSON.
+                if (parsed.preToolText) {
+                    await emitChunked(
+                        parsed.preToolText + "\n\n",
+                        params.callbacks?.onContentDelta,
+                    );
+                    fullText += parsed.preToolText + "\n\n";
+                }
+                await emitChunked(
+                    failureMsg,
+                    params.callbacks?.onContentDelta,
+                );
+                fullText += failureMsg;
+                return { fullText };
+            }
             if (promisesActionWithoutCall(raw)) {
                 consecutivePromisedNoAction += 1;
                 console.log(
