@@ -267,18 +267,23 @@ function formatToolResultsForModel(results: NormalizedToolResult[]): string {
 // the fence — that's the hallucinated-success failure mode the lawyer
 // hates. This regex catches the most common forms.
 const PROMISE_PATTERNS: RegExp[] = [
-    // "I'll <verb>" / "I will <verb>" / "I will now <verb>"
-    /\bI(?:'ll|\s+will)(?:\s+(?:now|then|next))?\s+(?:call|use|invoke|execute|run|apply|issue|emit|generate|create|replicate|edit|update|fix|repurpose|replace|draft|adapt|read|scan)\b/i,
+    // "I'll <verb>" / "I will <verb>" / "I will now <verb>".
+    // Verbs broadly cover act/edit/lookup/research/load patterns —
+    // anything where the agent says it's about to do something we'd
+    // expect to be a tool call.
+    /\bI(?:'ll|\s+will)(?:\s+(?:now|then|next))?\s+(?:call|use|invoke|execute|run|apply|issue|emit|generate|create|replicate|edit|update|fix|repurpose|replace|draft|adapt|read|scan|pull|fetch|get|retrieve|look\s+up|lookup|summarize|list|find|check|gather|load|grab|inspect|review|search|index)\b/i,
     // "calling the X tool now"
     /\bcalling\s+(?:the\s+)?\w+\s+tool\s+now\b/i,
     // "now <ing-verb>"
-    /\bnow\s+(?:calling|executing|invoking|generating|applying|replicating|editing|reading|issuing|repurposing|drafting)\b/i,
+    /\bnow\s+(?:calling|executing|invoking|generating|applying|replicating|editing|reading|issuing|repurposing|drafting|pulling|fetching|retrieving|looking\s+up|gathering|searching)\b/i,
     // Filler phrases that delay action
-    /\b(?:stand\s*by|one\s+moment|in\s+the\s+next\s+step|next\s+step|hang\s+on|hold\s+on)\b/i,
+    /\b(?:stand\s*by|one\s+moment|in\s+the\s+next\s+step|next\s+step|hang\s+on|hold\s+on|let\s+me\s+(?:check|see|look|grab|pull|fetch))\b/i,
     // "I am now <ing-verb>"
-    /\bI\s+am\s+(?:now\s+)?(?:executing|invoking|generating|applying|preparing|going\s+to)\b/i,
+    /\bI\s+am\s+(?:now\s+)?(?:executing|invoking|generating|applying|preparing|going\s+to|pulling|fetching|reading|looking\s+up)\b/i,
     // "I am going to / about to <verb>"
     /\bI\s+am\s+(?:going\s+to|about\s+to)\s+\w+/i,
+    // "Let me <verb>"
+    /\bLet\s+me\s+(?:call|use|invoke|run|apply|read|pull|fetch|get|retrieve|look|check|grab|index|search|scan|summarize|list|find|gather|load|inspect|review)\b/i,
 ];
 
 function promisesActionWithoutCall(text: string): boolean {
@@ -598,6 +603,9 @@ async function streamOpenClawWithTools(
             //      real failure so the lawyer isn't left in a silent loop.
             if (promisesActionWithoutCall(raw)) {
                 consecutivePromisedNoAction += 1;
+                console.log(
+                    `[openclaw enforcement] promise without action (#${consecutivePromisedNoAction}); raw=${JSON.stringify(raw.slice(0, 150))}`,
+                );
                 if (consecutivePromisedNoAction === 1) {
                     history.push({ role: "assistant", content: raw });
                     history.push({
