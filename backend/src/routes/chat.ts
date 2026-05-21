@@ -13,6 +13,7 @@ import {
 import { completeText } from "../lib/llm";
 import { getUserApiKeys, getUserModelSettings } from "../lib/userSettings";
 import { checkProjectAccess } from "../lib/access";
+import { verifyActionReceipts } from "../lib/openclaw/receipts";
 
 export const chatRouter = Router();
 
@@ -458,6 +459,24 @@ chatRouter.post("/", requireAuth, async (req, res) => {
         });
 
         const annotations = extractAnnotations(fullText, docIndex, events);
+
+        // Action-receipt guardrail: if the model narrated completion of
+        // a mutation but no doc_* receipt event fired, append a loud
+        // warning event + stream it to the UI so the lawyer sees the
+        // failure instead of trusting a hallucinated success.
+        const noActionWarning = verifyActionReceipts(fullText, events);
+        if (noActionWarning) {
+            try {
+                write(`data: ${JSON.stringify(noActionWarning)}\n\n`);
+            } catch {
+                /* socket may be closed */
+            }
+            events.push(noActionWarning as unknown as Parameters<typeof events.push>[0]);
+            console.warn(
+                `[chat/stream] no_action_warning fired (intent=${noActionWarning.intent}) — claim without receipt`,
+            );
+        }
+
         await db.from("chat_messages").insert({
             chat_id: chatId,
             role: "assistant",

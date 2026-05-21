@@ -141,6 +141,20 @@ export type AssistantEvent =
         reason?: string;
     }
   | {
+        type: "no_action_warning";
+        intent:
+            | "edit"
+            | "create"
+            | "replicate"
+            | "generate"
+            | "draft"
+            | "update"
+            | "repurpose";
+        claim_excerpt: string;
+        expected_receipts: string[];
+        message: string;
+    }
+  | {
         type: "doc_edited";
         filename: string;
         document_id: string;

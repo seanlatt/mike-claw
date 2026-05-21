@@ -1361,6 +1361,31 @@ export function AssistantMessage({
                 </div>
             );
         }
+        if (event.type === "no_action_warning") {
+            return (
+                <div
+                    key={globalIdx}
+                    className="rounded-lg border border-red-300 bg-red-50 px-3 py-2.5 text-sm text-red-900"
+                >
+                    <div className="flex items-start gap-2">
+                        <span aria-hidden className="select-none">⚠</span>
+                        <div className="flex-1 min-w-0">
+                            <div className="font-medium">
+                                No action was executed
+                            </div>
+                            <div className="mt-1 text-red-800">
+                                {event.message}
+                            </div>
+                            {event.claim_excerpt && (
+                                <div className="mt-1.5 text-xs text-red-700/80 italic">
+                                    Claim: &ldquo;{event.claim_excerpt}&rdquo;
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
         return null;
     };
 

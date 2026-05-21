@@ -583,6 +583,34 @@ export function useAssistantChat({
                             continue;
                         }
 
+                        if (data.type === "no_action_warning") {
+                            pushEvent({
+                                type: "no_action_warning",
+                                intent: data.intent as
+                                    | "edit"
+                                    | "create"
+                                    | "replicate"
+                                    | "generate"
+                                    | "draft"
+                                    | "update"
+                                    | "repurpose",
+                                claim_excerpt:
+                                    typeof data.claim_excerpt === "string"
+                                        ? data.claim_excerpt
+                                        : "",
+                                expected_receipts: Array.isArray(
+                                    data.expected_receipts,
+                                )
+                                    ? (data.expected_receipts as string[])
+                                    : [],
+                                message:
+                                    typeof data.message === "string"
+                                        ? data.message
+                                        : "No action receipt found.",
+                            });
+                            continue;
+                        }
+
                         if (data.type === "doc_read_start") {
                             pushEvent({
                                 type: "doc_read",
