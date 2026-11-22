@@ -12557,5 +12557,6 @@ insert into public.schema_migrations (filename) values
   ('20261101_24_wipe_memory_files_batch.sql'),
   ('20261107_01_playbook_review_publication.sql'),
   ('20261116_01_tabular_cache_revisions.sql'),
-  ('20261118_01_connector_write_approval_default.sql')
+  ('20261118_01_connector_write_approval_default.sql'),
+  ('20261122_01_openclaw_audit.sql')
 on conflict (filename) do nothing;

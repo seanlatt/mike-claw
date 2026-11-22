@@ -31,6 +31,7 @@ import {
   userMemoryRouter,
 } from "./modules/memory/memory.routes";
 import { playbooksRouter } from "./modules/playbooks/playbooks.routes";
+import { openclawRouter } from "./modules/openclaw/openclaw.routes";
 import { manifestPublicKey } from "./lib/manifestSigning";
 import {
   handleUnhandledError,
@@ -347,8 +348,16 @@ app.use("/documents", sourceDocumentsRouter);
 app.use("/audit", auditRouter);
 app.use("/playbooks", playbooksRouter);
 app.use("/upload-sessions", uploadSessionsRouter);
+app.use("/openclaw", openclawRouter);
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
+
+// OpenClaw gateway health probe - no auth required
+import { checkOpenClawHealth } from "./lib/openclaw/health";
+app.get("/health/openclaw", async (_req, res) => {
+  const health = await checkOpenClawHealth();
+  res.status(health.ok ? 200 : 503).json(health);
+});
 
 // Deliberate failure for verifying the error pipeline end to end (a real
 // thrown error through the real 500 path, so the Sentry event carries the
